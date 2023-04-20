@@ -17,6 +17,8 @@ public class Client implements Serializable {
     private UUID roomId;
     private Integer status;
 
+    public Client() {}
+
     public Client(UUID clientId, UUID userId, UUID roomId, Integer status) {
         this.clientId = clientId;
         this.userId = userId;
