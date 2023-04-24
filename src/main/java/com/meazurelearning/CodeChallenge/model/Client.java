@@ -2,6 +2,7 @@ package com.meazurelearning.CodeChallenge.model;
 
 import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 
 import java.io.Serializable;
@@ -11,7 +12,7 @@ import java.util.UUID;
 public class Client implements Serializable {
 
     @Id
-    @GeneratedValue
+    @GeneratedValue(strategy= GenerationType.AUTO)
     private UUID clientId;
     private UUID userId;
     private UUID roomId;
@@ -19,8 +20,7 @@ public class Client implements Serializable {
 
     public Client() {}
 
-    public Client(UUID clientId, UUID userId, UUID roomId, Integer status) {
-        this.clientId = clientId;
+    public Client(UUID userId, UUID roomId, Integer status) {
         this.userId = userId;
         this.roomId = roomId;
         this.status = status;

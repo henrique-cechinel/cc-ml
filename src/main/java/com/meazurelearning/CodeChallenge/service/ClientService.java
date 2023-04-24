@@ -23,54 +23,59 @@ public class ClientService {
         this.rabbitTemplate = rabbitTemplate;
     }
 
-    public Client createOrUpdateClient(Client client) {
-        Optional<Client> existingClient = clientRepository.findByUserIdAndRoomId(client.getUserId(), client.getRoomId());
+    private Client createAndSaveClient(Client newClient){
+        newClient.setClientId(null);
+
+        clientRepository.save(newClient);
+        rabbitTemplate.convertAndSend(RabbitConstants.CLIENT_CREATED_ROUTING_KEY, newClient);
+
+        return newClient;
+    }
+
+    private Client updateAndSaveClient(Client existingClient, Client newClient) {
+        existingClient.setUserId(newClient.getUserId());
+        existingClient.setRoomId(newClient.getRoomId());
+        existingClient.setStatus(newClient.getStatus());
+
+        clientRepository.save(existingClient);
+        rabbitTemplate.convertAndSend(RabbitConstants.CLIENT_UPDATED_ROUTING_KEY, existingClient);
+
+        return existingClient;
+    }
+
+    private Optional<Client> findClientById(UUID clientId) {
+        return clientRepository.findById(clientId);
+    }
+
+    public Client createOrUpdateClient(Client newClient) {
+        Optional<Client> existingClient = clientRepository.findByUserIdAndRoomId(newClient.getUserId(), newClient.getRoomId());
+
         if (existingClient.isPresent()) {
-            Client updatedClient = existingClient.get();
-            updatedClient.setStatus(client.getStatus());
-            clientRepository.save(updatedClient);
-            rabbitTemplate.convertAndSend(RabbitConstants.CLIENT_UPDATED_ROUTING_KEY, updatedClient);
-            return updatedClient;
+            return this.updateAndSaveClient(existingClient.get(), newClient);
         } else {
-            client.setClientId(UUID.randomUUID());
-            clientRepository.save(client);
-            rabbitTemplate.convertAndSend(RabbitConstants.CLIENT_CREATED_ROUTING_KEY, client);
-            return client;
+            return this.createAndSaveClient(newClient);
         }
     }
 
-    public Client updateClient(UUID clientId, Client client) {
-        Client existingClient = clientRepository.findById(clientId)
-                .orElseThrow(() -> new RuntimeException("Client not found"));
-
-        existingClient.setClientId(clientId);
-        existingClient.setUserId(client.getUserId());
-        existingClient.setRoomId(client.getRoomId());
-        existingClient.setStatus(client.getStatus());
-
-        Client updatedClient = clientRepository.save(existingClient);
-        rabbitTemplate.convertAndSend(RabbitConstants.CLIENT_UPDATED_ROUTING_KEY, updatedClient);
-        return updatedClient;
+    public Optional<Client> updateClient(UUID clientId, Client newClient) {
+        return findClientById(clientId).map((existingClient) -> this.updateAndSaveClient(existingClient, newClient));
     }
 
-    public void deleteClient(UUID clientId) {
-        Optional<Client> client = clientRepository.findById(clientId);
-        if (client.isPresent()) {
+    public Optional<Client> deleteClient(UUID clientId) {
+        return findClientById(clientId).map(existingClient -> {
             clientRepository.deleteById(clientId);
-            rabbitTemplate.convertAndSend(RabbitConstants.CLIENT_DELETED_ROUTING_KEY, client.get());
-        }
+            rabbitTemplate.convertAndSend(RabbitConstants.CLIENT_DELETED_ROUTING_KEY, existingClient);
+
+            return existingClient;
+        });
     }
 
-    public Client getClient(UUID clientId) {
-        return clientRepository.findById(clientId)
-                .orElseThrow(() -> new RuntimeException("Client not found"));
+    public Optional<Client> getClient(UUID clientId){
+        return this.findClientById(clientId);
     }
 
     public List<Client> getAllClients() {
-        List<Client> clients = clientRepository.findAll();
-        if (clients.isEmpty()) {
-            throw new RuntimeException("No clients found");
-        }
-        return clients;
+        return clientRepository.findAll();
     }
+
 }

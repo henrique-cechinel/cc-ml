@@ -12,8 +12,6 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 
 import java.util.*;
 
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.from;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
@@ -29,123 +27,175 @@ public class ClientServiceTest {
     @InjectMocks
     private ClientService clientService;
 
+    private Client instantiateRandomClient() {
+        Client randomClient = new Client();
+        randomClient.setUserId(UUID.randomUUID());
+        randomClient.setRoomId(UUID.randomUUID());
+        randomClient.setStatus(new Random().nextInt(100));
+
+        return randomClient;
+    }
+
     @Test
-    public void shouldCreateANewClient() {
-        Client client = new Client(UUID.randomUUID(),UUID.randomUUID(),UUID.randomUUID(),0);
+    void shouldCreateANewClient() {
+        Client newClient = instantiateRandomClient();
 
-        when(clientRepository.findByUserIdAndRoomId(client.getUserId(), client.getRoomId())).thenReturn(Optional.empty());
+        when(clientRepository.findByUserIdAndRoomId(newClient.getUserId(), newClient.getRoomId())).thenReturn(Optional.empty());
+        when(clientRepository.save(newClient)).thenAnswer(invocation -> {
+            Client savedClient = invocation.getArgument(0);
+            savedClient.setClientId(UUID.randomUUID());
+            return savedClient;
+        });
 
-        Client result = clientService.createOrUpdateClient(client);
+        Client result = clientService.createOrUpdateClient(newClient);
 
-        assertEquals(client, result);
+        assertNotNull(result.getClientId());
+        assertEquals(result.getUserId(), newClient.getUserId());
+        assertEquals(result.getRoomId(), newClient.getRoomId());
+        assertEquals(result.getStatus(), newClient.getStatus());
 
+        verify(clientRepository).findByUserIdAndRoomId(newClient.getUserId(), newClient.getRoomId());
+        verify(clientRepository).save(newClient);
         verify(rabbitTemplate).convertAndSend(RabbitConstants.CLIENT_CREATED_ROUTING_KEY, result);
         verify(rabbitTemplate, never()).convertAndSend(RabbitConstants.CLIENT_UPDATED_ROUTING_KEY, result);
     }
 
     @Test
-    public void shouldUpdateAClientInsteadOfCreateANewOne() {
-        Client existingClient = new Client(UUID.randomUUID(),UUID.randomUUID(),UUID.randomUUID(),1);
+    void shouldUpdateAClientInsteadOfCreateANewOne() {
+        UUID existingClientId = UUID.randomUUID();
+        UUID userId = UUID.randomUUID();
+        UUID roomId = UUID.randomUUID();
 
-        Client updatedClient  = new Client(UUID.randomUUID(),existingClient.getUserId(),existingClient.getRoomId(),2);
+        Client existingClient = new Client(userId, roomId, 1);
+        existingClient.setClientId(existingClientId);
 
-        when(clientRepository.findByUserIdAndRoomId(existingClient.getUserId(), existingClient.getRoomId())).thenReturn(Optional.of(existingClient));
-        when(clientRepository.save(existingClient)).thenReturn(updatedClient);
+        Client newClient = new Client(userId, roomId, 2);
 
-        Client result = clientService.createOrUpdateClient(updatedClient);
+        when(clientRepository.findByUserIdAndRoomId(userId, roomId)).thenReturn(Optional.of(existingClient));
+        when(clientRepository.save(existingClient)).thenReturn(existingClient);
 
-        assertThat(result)
-            .returns(existingClient.getClientId(), from(Client::getClientId))
-            .returns(existingClient.getUserId(), from(Client::getUserId))
-            .returns(existingClient.getRoomId(), from(Client::getRoomId))
-            .returns(updatedClient.getStatus(), from(Client::getStatus));
+        Client result = clientService.createOrUpdateClient(newClient);
 
+        assertEquals(result.getClientId(), existingClientId);
+        assertEquals(result.getUserId(), userId);
+        assertEquals(result.getRoomId(), roomId);
+        assertEquals(result.getStatus(), 2);
+
+        verify(clientRepository).findByUserIdAndRoomId(userId, roomId);
+        verify(clientRepository).save(existingClient);
         verify(rabbitTemplate).convertAndSend(RabbitConstants.CLIENT_UPDATED_ROUTING_KEY, result);
         verify(rabbitTemplate, never()).convertAndSend(RabbitConstants.CLIENT_CREATED_ROUTING_KEY, result);
     }
 
     @Test
-    public void shouldUpdateTheClientStatusSucessfully() {
-        Client existingClient = new Client(UUID.randomUUID(),UUID.randomUUID(),UUID.randomUUID(),1);
+    public void shouldUpdateTheClientSucessfully() {
+        UUID existingClientId = UUID.randomUUID();
 
-        Client updatedClient = new Client(existingClient.getClientId(),UUID.randomUUID(),UUID.randomUUID(),2);
+        Client existingClient = new Client(UUID.randomUUID(), UUID.randomUUID(), 1);
+        existingClient.setClientId(existingClientId);
+
+        Client updatingClient = new Client(UUID.randomUUID(),UUID.randomUUID(),2);
 
         when(clientRepository.findById(existingClient.getClientId())).thenReturn(Optional.of(existingClient));
-        when(clientRepository.save(existingClient)).thenReturn(updatedClient);
+        when(clientRepository.save(existingClient)).thenReturn(existingClient);
 
-        Client result = clientService.updateClient(existingClient.getClientId(), updatedClient);
+        Optional<Client> result = clientService.updateClient(existingClientId, updatingClient);
 
-        assertEquals(updatedClient, result);
+        assertEquals(result.get().getClientId(), existingClientId);
+        assertEquals(result.get().getUserId(), updatingClient.getUserId());
+        assertEquals(result.get().getRoomId(), updatingClient.getRoomId());
+        assertEquals(result.get().getStatus(), 2);
 
+        verify(clientRepository).findById(existingClientId);
         verify(clientRepository).save(existingClient);
-        verify(rabbitTemplate).convertAndSend(RabbitConstants.CLIENT_UPDATED_ROUTING_KEY, updatedClient);
+        verify(rabbitTemplate).convertAndSend(RabbitConstants.CLIENT_UPDATED_ROUTING_KEY, result.get());
     }
 
     @Test
-    public void shouldGetErrorClientNotFoundWhenTryingToUpdate() {
-        Client updatedClient = new Client(UUID.randomUUID(),UUID.randomUUID(),UUID.randomUUID(),2);
+    public void shouldNotUpdateWhenNotFindingAClient() {
+        UUID clientId = UUID.randomUUID();
 
-        when(clientRepository.findById(updatedClient.getClientId())).thenReturn(Optional.empty());
+        Client updatingClient = instantiateRandomClient();
 
-        assertThrows(RuntimeException.class, () -> clientService.updateClient(updatedClient.getClientId(), updatedClient));
+        when(clientRepository.findById(clientId)).thenReturn(Optional.empty());
 
-        verify(clientRepository).findById(updatedClient.getClientId());
-        verify(clientRepository, never()).save(updatedClient);
-        verify(rabbitTemplate, never()).convertAndSend(RabbitConstants.CLIENT_CREATED_ROUTING_KEY, updatedClient);
+
+        Optional<Client> result = clientService.updateClient(clientId, updatingClient);
+
+        assertEquals(result, Optional.empty());
+
+        verify(clientRepository).findById(clientId);
+        verify(clientRepository, never()).save(any(Client.class));
+        verify(rabbitTemplate, never()).convertAndSend(anyString(), any(Client.class));
     }
 
     @Test
     public void shouldSuccessfullyDeleteAClient() {
-        Client existingClient = new Client(UUID.randomUUID(),UUID.randomUUID(),UUID.randomUUID(),1);
+        UUID clientId = UUID.randomUUID();
 
-        when(clientRepository.findById(existingClient.getClientId())).thenReturn(Optional.of(existingClient));
+        Client existingClient = instantiateRandomClient();
+        existingClient.setClientId(clientId);
 
-        clientService.deleteClient(existingClient.getClientId());
+        when(clientRepository.findById(clientId)).thenReturn(Optional.of(existingClient));
 
-        verify(clientRepository).deleteById(existingClient.getClientId());
+        Optional<Client> result = clientService.deleteClient(clientId);
+
+        assertEquals(result.get().getClientId(), clientId);
+        verify(clientRepository).deleteById(clientId);
         verify(rabbitTemplate).convertAndSend(RabbitConstants.CLIENT_DELETED_ROUTING_KEY, existingClient);
     }
 
     @Test
-    public void shouldFailToDeleteANonexistentClient() {
-        Client nonexistentClient = new Client(UUID.randomUUID(),UUID.randomUUID(),UUID.randomUUID(),0);
+    public void shouldNotDeleteWhenNotFindingAClient() {
+        UUID clientId = UUID.randomUUID();
 
-        when(clientRepository.findById(nonexistentClient.getClientId())).thenReturn(Optional.empty());
+        when(clientRepository.findById(clientId)).thenReturn(Optional.empty());
 
-        clientService.deleteClient(nonexistentClient.getClientId());
+        Optional<Client> result = clientService.deleteClient(clientId);
 
-        verify(clientRepository, never()).deleteById(nonexistentClient.getClientId());
-        verify(rabbitTemplate, never()).convertAndSend(RabbitConstants.CLIENT_DELETED_ROUTING_KEY, nonexistentClient);
+        assertEquals(result, Optional.empty());
+        verify(clientRepository, never()).deleteById(any(UUID.class));
+        verify(rabbitTemplate, never()).convertAndSend(anyString(), any(Client.class));
     }
 
     @Test
     public void shouldSuccessfullyGetAClient() {
-        Client existingClient = new Client(UUID.randomUUID(),UUID.randomUUID(),UUID.randomUUID(),1);
+        UUID clientId = UUID.randomUUID();
 
-        when(clientRepository.findById(existingClient.getClientId())).thenReturn(Optional.of(existingClient));
+        Client existingClient = instantiateRandomClient();
+        existingClient.setClientId(clientId);
 
-        Client result = clientService.getClient(existingClient.getClientId());
+        when(clientRepository.findById(clientId)).thenReturn(Optional.of(existingClient));
 
-        verify(clientRepository).findById(existingClient.getClientId());
-        assertEquals(existingClient, result);
+        Optional<Client> result = clientService.getClient(clientId);
+
+        assertEquals(result.get().getClientId(), clientId);
+        assertEquals(result.get().getUserId(), existingClient.getUserId());
+        assertEquals(result.get().getRoomId(), existingClient.getRoomId());
+        assertEquals(result.get().getStatus(), existingClient.getStatus());
+
+        verify(clientRepository).findById(clientId);
     }
 
     @Test
-    public void shouldFailToGetANonexistentClient() {
-        UUID nonexistentClientID = UUID.randomUUID();
+    public void shouldGetEmptyClientWhenClientDoNotExists() {
+        UUID clientId = UUID.randomUUID();
 
-        when(clientRepository.findById(nonexistentClientID)).thenReturn(Optional.empty());
+        when(clientRepository.findById(clientId)).thenReturn(Optional.empty());
 
-        assertThrows(RuntimeException.class, () -> clientService.getClient(nonexistentClientID));
+        Optional<Client> result = clientService.getClient(clientId);
 
-        verify(clientRepository).findById(nonexistentClientID);
+        assertEquals(result, Optional.empty());
+        verify(clientRepository).findById(clientId);
     }
 
     @Test
     public void shouldGetAllClientsSuccessfully() {
         List<Client> clients = new ArrayList<>();
         for (int i = 0; i < 5; i++) {
-            Client client = new Client(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), i);
+            Client client = new Client(UUID.randomUUID(), UUID.randomUUID(), i);
+            client.setClientId(UUID.randomUUID());
+
             clients.add(client);
         }
 
@@ -153,15 +203,8 @@ public class ClientServiceTest {
 
         List<Client> result = clientService.getAllClients();
 
-        verify(clientRepository).findAll();
-        assertEquals(clients, result);
-    }
-
-    @Test
-    public void shouldFailToGetAllClientsDueToNotExistingAny() {
-        when(clientRepository.findAll()).thenReturn(Collections.emptyList());
-
-        assertThrows(RuntimeException.class, () -> clientService.getAllClients());
+        assertEquals(result.size(), 5);
+        assertEquals(result.get(4).getStatus(), 4);
 
         verify(clientRepository).findAll();
     }
